@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import google.generativeai as genai
 import os
+from googleapiclient.discovery import build
 
 app = FastAPI()
 
@@ -21,6 +22,8 @@ class Query(BaseModel):
 
 # ✅ Lấy API key từ biến môi trường
 API_KEY = os.getenv("GEMINI_API_KEY")
+GOOGLE_SEARCH_API_KEY = os.getenv("GOOGLE_SEARCH_API_KEY")
+GOOGLE_SEARCH_CX = os.getenv("GOOGLE_SEARCH_CX")
 
 if not API_KEY:
     print("❌ Chưa cấu hình biến môi trường GEMINI_API_KEY")
@@ -30,6 +33,26 @@ genai.configure(api_key=API_KEY)
 
 # ✅ Khởi tạo model Gemini 2.5 Flash Preview
 model = genai.GenerativeModel("gemini-2.5-flash-preview-05-20")
+
+# ✅ Hàm gọi Google Search
+def search_sources(query):
+    if not GOOGLE_SEARCH_API_KEY or not GOOGLE_SEARCH_CX:
+        return []
+    try:
+        service = build("customsearch", "v1", developerKey=GOOGLE_SEARCH_API_KEY)
+        res = service.cse().list(q=query, cx=GOOGLE_SEARCH_CX, num=3).execute()
+        results = res.get("items", [])
+        return [
+            {
+                "url": item.get("link"),
+                "title": item.get("title"),
+                "description": item.get("snippet")
+            }
+            for item in results
+        ]
+    except Exception as e:
+        print("❌ Lỗi Google Search:", e)
+        return []
 
 @app.post("/api/chat")
 async def chat(query: Query):
@@ -45,9 +68,11 @@ async def chat(query: Query):
         response = model.generate_content(query.prompt)
         print("📥 Phản hồi từ Gemini:", response.text)
 
+        sources = search_sources(query.prompt)
+
         return {
             "answer": response.text,
-            "sources": []  # Có thể cập nhật sau
+            "sources": sources
         }
 
     except Exception as e:
