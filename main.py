@@ -31,23 +31,6 @@ GOOGLE_SEARCH_CX = os.getenv("GOOGLE_SEARCH_CX")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash-preview-05-20")
 
-
-# ✅ Hàm cải thiện truy vấn tìm kiếm
-def enhance_query_for_search(prompt: str) -> str:
-    prompt_lower = prompt.lower()
-
-    if "tổng thống mỹ" in prompt_lower:
-        return "Tổng thống Hoa Kỳ hiện tại là ai"
-    if "thủ tướng nhật" in prompt_lower:
-        return "Thủ tướng Nhật Bản hiện tại là ai"
-    if "thủ tướng việt nam" in prompt_lower:
-        return "Thủ tướng Việt Nam hiện tại là ai"
-    if "hôm nay là ngày" in prompt_lower or "today" in prompt_lower:
-        return "Hôm nay là ngày mấy"
-
-    return prompt  # Trả lại nguyên nếu không match
-
-
 # ✅ Tìm kiếm Google
 def google_search(query: str, num_results: int = 5) -> List[str]:
     search_url = "https://www.googleapis.com/customsearch/v1"
@@ -67,7 +50,6 @@ def google_search(query: str, num_results: int = 5) -> List[str]:
         print("❌ Lỗi Google Search:", e)
         return []
 
-
 @app.post("/api/chat")
 async def chat(query: Query):
     print("📨 Prompt người dùng:", query.prompt)
@@ -75,16 +57,14 @@ async def chat(query: Query):
     if not GEMINI_API_KEY or not GOOGLE_SEARCH_API_KEY or not GOOGLE_SEARCH_CX:
         return {"answer": "Thiếu cấu hình API key.", "sources": []}
 
-    # ✅ Trả lời nhanh nếu hỏi ngày
+    # Trả nhanh nếu chỉ hỏi ngày
     if any(x in query.prompt.lower() for x in ["hôm nay là ngày", "ngày bao nhiêu", "today"]):
         today = datetime.now().strftime("Hôm nay là %A, ngày %d tháng %m năm %Y.")
         return {"answer": today, "sources": []}
 
     try:
-        # ✅ Cải thiện truy vấn tìm kiếm
-        search_query = enhance_query_for_search(query.prompt)
-
         # 🔍 Google Search real-time
+        search_query = query.prompt
         snippets = google_search(search_query)
         if not snippets:
             return {
@@ -92,15 +72,13 @@ async def chat(query: Query):
                 "sources": []
             }
 
-        # ✅ Tạo prompt có thời gian, gợi ý chính xác
+        # ✅ Prompt Gemini sử dụng dữ kiện cập nhật
         today = datetime.now().strftime("%d/%m/%Y")
         context = "\n".join([f"- {s}" for s in snippets])
         full_prompt = f"""
-Bạn là một trợ lý AI chính xác và đáng tin cậy.
-Dưới đây là thông tin tìm kiếm mới nhất từ Google Search (cập nhật ngày {today}).
-
-Chỉ dựa vào thông tin dưới đây để trả lời câu hỏi.
-Không phỏng đoán, không thêm thông tin ngoài dữ kiện.
+Bạn là một trợ lý AI đáng tin cậy.
+Dưới đây là thông tin được cập nhật mới nhất từ Google Search (ngày {today}).
+Hãy trả lời câu hỏi người dùng chỉ dựa vào các thông tin này. Nếu không đủ dữ kiện, hãy nói "Tôi không chắc chắn dựa trên dữ liệu hiện tại".
 
 Thông tin:
 {context}
@@ -110,7 +88,6 @@ Câu hỏi: {query.prompt}
 Trả lời ngắn gọn, đúng sự thật:
 """
 
-        # 🤖 Gửi tới Gemini
         response = model.generate_content(full_prompt)
         print("📥 Gemini trả về:", response.text)
 
