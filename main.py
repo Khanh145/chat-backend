@@ -9,7 +9,7 @@ from datetime import datetime
 
 app = FastAPI()
 
-# CORS cho frontend
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://academic-chat-refine.lovable.app"],
@@ -18,11 +18,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Model dữ liệu đầu vào
+# Dữ liệu frontend gửi lên
 class Query(BaseModel):
     prompt: str
 
-# API Key từ môi trường
+# API key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GOOGLE_SEARCH_API_KEY = os.getenv("GOOGLE_SEARCH_API_KEY")
 GOOGLE_SEARCH_CX = os.getenv("GOOGLE_SEARCH_CX")
@@ -31,82 +31,68 @@ GOOGLE_SEARCH_CX = os.getenv("GOOGLE_SEARCH_CX")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash-preview-05-20")
 
-# 👉 Hàm tối ưu prompt tìm kiếm
-def refine_query(prompt: str) -> str:
-    prompt = prompt.strip()
-    today = datetime.now().strftime("%B %Y")  # ví dụ: "June 2025"
-    if "?" not in prompt:
-        prompt += "?"
-    if "hiện tại" not in prompt.lower() and "mới nhất" not in prompt.lower():
-        prompt += f" (thông tin mới nhất {today})"
-    return prompt
-
-# 👉 Hàm tìm kiếm Google
+# Tìm kiếm Google
 def google_search(query: str, num_results: int = 5) -> List[str]:
-    search_url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "key": GOOGLE_SEARCH_API_KEY,
-        "cx": GOOGLE_SEARCH_CX,
-        "q": query,
-        "num": num_results
-    }
-
     try:
-        response = requests.get(search_url, params=params)
+        params = {
+            "key": GOOGLE_SEARCH_API_KEY,
+            "cx": GOOGLE_SEARCH_CX,
+            "q": query,
+            "num": num_results
+        }
+        response = requests.get("https://www.googleapis.com/customsearch/v1", params=params)
         items = response.json().get("items", [])[:num_results]
-        snippets = [f"{item.get('title')}: {item.get('snippet')}" for item in items]
-        return snippets
+        return [f"{item['title']}: {item['snippet']}" for item in items]
     except Exception as e:
-        print("❌ Google Search error:", e)
+        print("❌ Google Search Error:", e)
         return []
 
+# Xử lý API chat
 @app.post("/api/chat")
 async def chat(query: Query):
-    print("📨 Prompt người dùng:", query.prompt)
+    print("📨 Câu hỏi:", query.prompt)
 
     if not GEMINI_API_KEY or not GOOGLE_SEARCH_API_KEY or not GOOGLE_SEARCH_CX:
-        return {"answer": "Thiếu cấu hình API key.", "sources": []}
-
-    # ✅ Trả lời nhanh nếu chỉ hỏi ngày
-    if any(x in query.prompt.lower() for x in ["hôm nay là ngày", "ngày bao nhiêu", "today"]):
-        today = datetime.now().strftime("Hôm nay là %A, ngày %d tháng %m năm %Y.")
-        return {"answer": today, "sources": []}
+        return {"answer": "Chưa cấu hình API key.", "sources": []}
 
     try:
-        # ✅ Cải thiện câu hỏi để tìm kiếm hiệu quả hơn
-        search_query = refine_query(query.prompt)
+        # Bước 1: Hỏi Gemini có cần Google Search không
+        check_prompt = f"""
+Người dùng hỏi: "{query.prompt}"
 
-        # 🔍 Tìm kiếm Google real-time
-        snippets = google_search(search_query)
-        if not snippets:
-            return {
-                "answer": "Hiện tại không tìm thấy thông tin mới nào liên quan đến câu hỏi của bạn.",
-                "sources": []
-            }
+Bạn hãy trả lời ngắn gọn "YES" nếu cần thêm thông tin Google để trả lời chính xác hơn.
+Nếu có thể tự trả lời, hãy viết "NO".
+Chỉ trả về YES hoặc NO.
+"""
+        need_search = model.generate_content(check_prompt).text.strip().upper()
+        print("🤖 Có cần tìm kiếm không?", need_search)
 
-        # ✅ Tạo prompt chuẩn gửi đến Gemini
-        today_str = datetime.now().strftime("%d/%m/%Y")
-        context = "\n".join([f"- {s}" for s in snippets])
-        full_prompt = f"""
-Bạn là một trợ lý AI chính xác và đáng tin cậy.
-Dưới đây là thông tin được tìm kiếm từ Google (cập nhật ngày {today_str}).
+        snippets = []
+        final_prompt = ""
 
-Chỉ sử dụng thông tin này để trả lời. Nếu không đủ dữ kiện, hãy trả lời rằng chưa có dữ liệu phù hợp.
+        # Bước 2: Nếu cần Google → tìm kiếm và gửi lại prompt kèm context
+        if "YES" in need_search:
+            snippets = google_search(query.prompt)
+            context = "\n".join([f"- {s}" for s in snippets])
+            today = datetime.now().strftime("%d/%m/%Y")
+            final_prompt = f"""
+Bạn là một trợ lý AI đáng tin cậy. Dưới đây là thông tin tìm kiếm mới nhất từ Google (cập nhật ngày {today}).
 
-Thông tin:
+Chỉ dựa vào dữ kiện sau để trả lời:
 {context}
 
-Câu hỏi người dùng: {query.prompt}
+Câu hỏi: {query.prompt}
 
 Trả lời:
 """
+        else:
+            final_prompt = query.prompt
 
-        # 🤖 Gửi tới Gemini
-        response = model.generate_content(full_prompt)
-        print("📥 Gemini trả về:", response.text)
+        # Bước 3: Gửi prompt chính thức đến Gemini
+        answer = model.generate_content(final_prompt).text.strip()
 
         return {
-            "answer": response.text.strip(),
+            "answer": answer,
             "sources": snippets
         }
 
