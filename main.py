@@ -6,7 +6,7 @@ import os
 
 app = FastAPI()
 
-# ✅ Cấu hình CORS
+# ✅ Cấu hình CORS để cho phép frontend truy cập
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://academic-chat-refine.lovable.app"],
@@ -15,40 +15,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Mô hình dữ liệu gửi từ frontend
+# ✅ Model dữ liệu nhận từ frontend
 class Query(BaseModel):
     prompt: str
 
-# ✅ Lấy API key từ biến môi trường
+# ✅ Endpoint Gemini + API key
 API_KEY = os.getenv("GEMINI_API_KEY")
 GENAI_ENDPOINT = (
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + API_KEY
+    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={API_KEY}"
 )
 
+# ✅ Endpoint xử lý chatbot
 @app.post("/api/chat")
 async def chat(query: Query):
-    print("Prompt nhận được:", query.prompt)
+    print("📨 Prompt nhận được từ người dùng:", query.prompt)
 
-    # ✅ Nếu không có API_KEY → phản hồi mô phỏng
+    # Nếu chưa có key thì trả giả lập
     if not API_KEY:
-        print("⚠️ Không tìm thấy GEMINI_API_KEY. Trả về dữ liệu mô phỏng.")
+        print("❌ Chưa cấu hình GEMINI_API_KEY trong biến môi trường.")
         return {
-            "answer": f"Đây là câu trả lời mô phỏng cho: '{query.prompt}'",
-            "sources": [
-                {
-                    "url": "https://example.com/source1",
-                    "title": "Nguồn 1",
-                    "description": "Nguồn học thuật minh họa"
-                },
-                {
-                    "url": "https://example.com/source2",
-                    "title": "Nguồn 2",
-                    "description": "Báo cáo nghiên cứu giả lập"
-                }
-            ]
+            "answer": "Không tìm thấy API key. Vui lòng cấu hình lại.",
+            "sources": []
         }
 
-    # ✅ Gọi Gemini nếu có key
+    # Tạo payload gửi tới Gemini
     payload = {
         "contents": [
             {
@@ -64,17 +54,20 @@ async def chat(query: Query):
 
     try:
         response = requests.post(GENAI_ENDPOINT, json=payload, headers=headers)
-        print("Phản hồi thô từ Gemini:", response.text)
+        print("📥 Phản hồi thô từ Gemini:", response.text)  # Log toàn bộ JSON trả về
+
         data = response.json()
+
+        # Trích xuất câu trả lời
         text_reply = data["candidates"][0]["content"]["parts"][0]["text"]
 
         return {
             "answer": text_reply,
-            "sources": []  # Sau có thể sinh tự động nếu cần
+            "sources": []  # Chưa có phân tích nguồn
         }
 
     except Exception as e:
-        print("Lỗi gọi Gemini:", e)
+        print("❌ Lỗi khi gọi Gemini API:", e)
         return {
             "answer": "Xin lỗi, đã có lỗi xảy ra.",
             "sources": []
